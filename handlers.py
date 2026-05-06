@@ -153,11 +153,12 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     await _delete_user_message(update)
     state = storage.load(chat_id)
-    await context.bot.send_message(
+    m = await context.bot.send_message(
         chat_id=chat_id,
         text=msg.stats_text(state),
         parse_mode=ParseMode.HTML,
     )
+    _schedule_delete(context.bot, chat_id, m.message_id, delay=30)
 
 
 async def cmd_undo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -268,11 +269,12 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _cb_newgame(q, context, chat_id, state)
         elif data == "stats":
             await q.answer()
-            await context.bot.send_message(
+            m = await context.bot.send_message(
                 chat_id=chat_id,
                 text=msg.stats_text(state),
                 parse_mode=ParseMode.HTML,
             )
+            _schedule_delete(context.bot, chat_id, m.message_id, delay=30)
         elif data.startswith("confirm:"):
             await _cb_confirm(q, context, chat_id, state, data.split(":", 1)[1])
         elif data.startswith("imp:"):
