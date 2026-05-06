@@ -436,15 +436,7 @@ async def _finish_game(context, chat_id: int, state: dict):
     storage.save(chat_id, state)
     sb_id = g.get("score_board_message_id")
     if sb_id:
-        try:
-            await context.bot.edit_message_text(
-                chat_id=chat_id, message_id=sb_id,
-                text=msg.score_board_text(g),
-                reply_markup=None,
-                parse_mode=ParseMode.HTML,
-            )
-        except TelegramError:
-            pass
+        await _safe_delete(context.bot, chat_id, sb_id)
     end_msg = await context.bot.send_message(
         chat_id=chat_id,
         text=msg.end_game_text(record, today),
