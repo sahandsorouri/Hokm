@@ -132,8 +132,8 @@ def help_text() -> str:
 def start_text() -> str:
     return (
         "🃏 سلام! ربات حکم آماده‌ست.\n"
-        "<code>/newgame</code> بزن شروع کنیم.\n"
-        "<code>/help</code> برای راهنما."
+        "/newgame بزن شروع کنیم.\n"
+        "/help برای راهنما."
     )
 
 
