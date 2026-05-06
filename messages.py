@@ -1,8 +1,30 @@
+from __future__ import annotations
+from datetime import datetime
+
 _FA_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
 
 
 def fa(n) -> str:
     return str(n).translate(_FA_DIGITS)
+
+
+def _format_duration(started_at: str, ended_at: str) -> str:
+    try:
+        start = datetime.fromisoformat(started_at)
+        end = datetime.fromisoformat(ended_at)
+        total = int((end - start).total_seconds())
+        if total < 60:
+            return f"{fa(total)} ثانیه"
+        minutes = total // 60
+        if minutes < 60:
+            return f"{fa(minutes)} دقیقه"
+        hours = minutes // 60
+        mins = minutes % 60
+        if mins == 0:
+            return f"{fa(hours)} ساعت"
+        return f"{fa(hours)} ساعت و {fa(mins)} دقیقه"
+    except (TypeError, ValueError):
+        return ""
 
 
 TEAM_LABEL = {"red": "🔴 قرمز", "blue": "🔵 آبی"}
@@ -38,6 +60,9 @@ def end_game_text(record: dict, today: dict) -> str:
     winner = record["winner"]
     fs = record["final_score"]
 
+    duration = _format_duration(record.get("started_at", ""), record.get("ended_at", ""))
+    duration_line = f"\n⏱ مدت بازی: {duration}" if duration else ""
+
     today_line = (
         f"🔴 {fa(today['today_wins']['red'])} — {fa(today['today_wins']['blue'])} 🔵"
     )
@@ -54,7 +79,8 @@ def end_game_text(record: dict, today: dict) -> str:
         "🏆 <b>بازی تموم شد!</b>\n"
         f"{TEAM_LABEL[winner]} برنده 🎉\n"
         "\n🎯 <b>نتیجه:</b>\n"
-        f"🔴 {fa(fs['red'])} — {fa(fs['blue'])} 🔵\n"
+        f"🔴 {fa(fs['red'])} — {fa(fs['blue'])} 🔵"
+        f"{duration_line}\n"
         f"\n📅 <b>امروز ({today['today_date']}):</b>\n"
         f"{today_line}\n"
         "\n🏆 <b>مجموع کل:</b>\n"
