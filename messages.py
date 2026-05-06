@@ -24,12 +24,12 @@ def score_board_text(g: dict) -> str:
     red = g["score"]["red"]
     blue = g["score"]["blue"]
     hand_num = len(g["hands"]) + 1
-    hakem_label = TEAM_COLOR[g["hakem"]]
+    hakem_line = f" • حاکم: {TEAM_COLOR[g['hakem']]}" if g["hands"] else ""
     return (
         "🃏 <b>بازی در جریان</b>\n"
         f"\n🔴 قرمز  <b>{fa(red)} — {fa(blue)}</b>  آبی 🔵\n"
         "━━━━━━━━━━━━━━━━━\n"
-        f"دست {fa(hand_num)} • حاکم: {hakem_label}\n"
+        f"دست {fa(hand_num)}{hakem_line}\n"
         f"{_last_hand_line(g)}"
     )
 
