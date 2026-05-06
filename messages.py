@@ -37,29 +37,16 @@ def score_board_text(g: dict) -> str:
 def end_game_text(record: dict, today: dict) -> str:
     winner = record["winner"]
     fs = record["final_score"]
-    kots = record["kots"]
-    kot_line = ""
-    if kots["red"] or kots["blue"]:
-        parts = []
-        if kots["red"]:
-            parts.append(f"🔴×{fa(kots['red'])}")
-        if kots["blue"]:
-            parts.append(f"🔵×{fa(kots['blue'])}")
-        kot_line = f"\n⚡ کت این بازی: {'  '.join(parts)}"
 
     today_line = (
         f"🔴 {fa(today['today_wins']['red'])} — {fa(today['today_wins']['blue'])} 🔵"
     )
-    today_kot_line = ""
-    tk = today["today_kots"]
-    if tk["red"] or tk["blue"]:
-        today_kot_line = f"\n⚡ 🔴×{fa(tk['red'])}  🔵×{fa(tk['blue'])}"
 
     total_line = (
         f"🔴 {fa(today['total_wins']['red'])} — {fa(today['total_wins']['blue'])} 🔵"
     )
-    total_kot_line = ""
     tlk = today["total_kots"]
+    total_kot_line = ""
     if tlk["red"] or tlk["blue"]:
         total_kot_line = f"\n⚡ 🔴×{fa(tlk['red'])}  🔵×{fa(tlk['blue'])}"
 
@@ -67,10 +54,9 @@ def end_game_text(record: dict, today: dict) -> str:
         "🏆 <b>بازی تموم شد!</b>\n"
         f"{TEAM_LABEL[winner]} برنده 🎉\n"
         "\n🎯 <b>نتیجه:</b>\n"
-        f"🔴 {fa(fs['red'])} — {fa(fs['blue'])} 🔵"
-        f"{kot_line}\n"
+        f"🔴 {fa(fs['red'])} — {fa(fs['blue'])} 🔵\n"
         f"\n📅 <b>امروز ({today['today_date']}):</b>\n"
-        f"{today_line}{today_kot_line}\n"
+        f"{today_line}\n"
         "\n🏆 <b>مجموع کل:</b>\n"
         f"{total_line}{total_kot_line}"
     )
