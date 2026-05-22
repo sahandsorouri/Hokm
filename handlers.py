@@ -8,12 +8,16 @@ from telegram.error import BadRequest, TelegramError
 from telegram.ext import ContextTypes
 
 import config
+import events
 import game
 import keyboards as kb
 import messages as msg
 import storage
 
 log = logging.getLogger("hokm.handlers")
+
+# Per-chat background refresh tasks for the live scoreboard (#4: auto-updating "last update" line).
+_refresh_tasks: dict[int, asyncio.Task] = {}
 
 IMPORT_RE = re.compile(
     r"^(?P<date>\d{4}-\d{2}-\d{2})\s+(?P<r>\d+)-(?P<b>\d+)(?:\s+(?P<rk>\d+)-(?P<bk>\d+))?$"
@@ -46,6 +50,79 @@ async def _delete_user_message(update: Update):
             pass
 
 
+def _log_hand_event(chat_id: int, g: dict) -> None:
+    """Log the most recently added hand to the events file."""
+    if not g.get("hands"):
+        return
+    h = g["hands"][-1]
+    kot_type = None
+    if h.get("kot"):
+        ha = h.get("hakem_at_hand")
+        kot_type = "normal" if (ha is not None and h["winner"] == ha) else "hakem"
+    events.append(chat_id, {
+        "type": "hand",
+        "hand_no": len(g["hands"]),
+        "winner": h["winner"],
+        "kot": bool(h.get("kot")),
+        "kot_type": kot_type,
+        "hakem_at_hand": h.get("hakem_at_hand"),
+        "points": h.get("points"),
+        "wrapped": bool(h.get("wrapped")),
+        "score_after": dict(g["score"]),
+    })
+
+
+async def _refresh_loop(application, chat_id: int):
+    """Re-render the scoreboard every LIVE_REFRESH_SECONDS so 'X minutes ago' ticks."""
+    try:
+        while True:
+            await asyncio.sleep(config.LIVE_REFRESH_SECONDS)
+            try:
+                async with storage.lock_for(chat_id):
+                    state = storage.load(chat_id)
+                    g = state.get("active_game")
+                    if not g:
+                        return  # game ended; stop loop
+                    msg_id = g.get("score_board_message_id")
+                    if not msg_id:
+                        continue
+                    try:
+                        await application.bot.edit_message_text(
+                            chat_id=chat_id, message_id=msg_id,
+                            text=msg.score_board_text(g),
+                            reply_markup=kb.main_kb(),
+                            parse_mode=ParseMode.HTML,
+                        )
+                    except BadRequest as e:
+                        if "not modified" in str(e).lower():
+                            pass
+                        else:
+                            log.warning("refresh edit failed (chat=%s): %s", chat_id, e)
+                    except TelegramError as e:
+                        log.warning("refresh telegram error (chat=%s): %s", chat_id, e)
+            except Exception:
+                log.exception("refresh loop iteration error (chat=%s)", chat_id)
+    except asyncio.CancelledError:
+        return
+    finally:
+        _refresh_tasks.pop(chat_id, None)
+
+
+def _ensure_refresh_running(context, chat_id: int) -> None:
+    """Start the refresh loop for this chat if not already running."""
+    task = _refresh_tasks.get(chat_id)
+    if task and not task.done():
+        return
+    application = context.application
+    _refresh_tasks[chat_id] = asyncio.create_task(_refresh_loop(application, chat_id))
+
+
+def _cancel_refresh(chat_id: int) -> None:
+    task = _refresh_tasks.pop(chat_id, None)
+    if task and not task.done():
+        task.cancel()
+
+
 async def _ephemeral(context: ContextTypes.DEFAULT_TYPE, chat_id: int, text: str):
     try:
         m = await context.bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.HTML)
@@ -68,6 +145,7 @@ async def _send_scoreboard_fresh(context, chat_id: int, state: dict):
     )
     g["score_board_message_id"] = m.message_id
     storage.save(chat_id, state)
+    _ensure_refresh_running(context, chat_id)
 
 
 async def _edit_scoreboard(context, chat_id: int, state: dict, *,
@@ -90,6 +168,7 @@ async def _edit_scoreboard(context, chat_id: int, state: dict, *,
             text=text, reply_markup=reply_markup,
             parse_mode=ParseMode.HTML,
         )
+        _ensure_refresh_running(context, chat_id)
     except BadRequest as e:
         if "not modified" in str(e).lower():
             return
@@ -135,6 +214,11 @@ async def cmd_newgame(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def _start_new_game(context, chat_id: int, state: dict):
     state["last_ended_game"] = None
     state["active_game"] = game.new_game()
+    events.append(chat_id, {
+        "type": "game_start",
+        "initial_hakem": state["active_game"]["initial_hakem"],
+        "game_day": state["active_game"]["game_day"],
+    })
     await _send_scoreboard_fresh(context, chat_id, state)
 
 
@@ -172,12 +256,18 @@ async def cmd_undo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def _do_undo(context, chat_id: int, state: dict):
     g = state.get("active_game")
     if g and game.can_undo(g):
-        game.undo_last(g)
+        popped = game.undo_last(g)
+        events.append(chat_id, {
+            "type": "undo_hand",
+            "popped": popped,
+            "score_after": dict(g["score"]),
+        })
         storage.save(chat_id, state)
         await _edit_scoreboard(context, chat_id, state)
         return
     if game.can_undo_ended(state):
         if game.restore_last_game(state):
+            events.append(chat_id, {"type": "undo_ended_game"})
             storage.save(chat_id, state)
             await _send_scoreboard_fresh(context, chat_id, state)
             return
@@ -234,6 +324,11 @@ async def cmd_import(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         game.add_imported_day(state, day, r, b, rk, bk, replace=False)
+        events.append(chat_id, {
+            "type": "import",
+            "day": day, "wins": {"red": r, "blue": b},
+            "kots": {"red": rk, "blue": bk}, "replaced": False,
+        })
         storage.save(chat_id, state)
         await context.bot.send_message(
             chat_id=chat_id,
@@ -260,6 +355,8 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _cb_kot_open(q, context, chat_id, state)
         elif data.startswith("kotwin:"):
             await _cb_kot_choose(q, context, chat_id, state, data.split(":", 1)[1])
+        elif data.startswith("kot1:"):
+            await _cb_kot_first_hand(q, context, chat_id, state, data.split(":", 1)[1])
         elif data == "undo":
             await q.answer()
             await _do_undo(context, chat_id, state)
@@ -292,6 +389,7 @@ async def _cb_win(q, context, chat_id, state, team):
         await q.answer()
         return
     pts = game.add_hand(g, team, kot=False)
+    _log_hand_event(chat_id, g)
     await q.answer(f"+{pts} {msg.TEAM_NAME[team]}")
     if game.game_ended(g):
         await _finish_game(context, chat_id, state)
@@ -306,11 +404,58 @@ async def _cb_kot_open(q, context, chat_id, state):
         await q.answer(msg.stale_button())
         return
     await q.answer()
+    if not g["hands"]:
+        # first hand: hakem hasn't been revealed yet, ask user for both
+        await _edit_scoreboard(
+            context, chat_id, state,
+            extra_text=msg.kot_first_hand_prompt(),
+            reply_markup=kb.kot_first_hand_kb(),
+        )
+        return
     await _edit_scoreboard(
         context, chat_id, state,
         extra_text=msg.kot_team_prompt(),
         reply_markup=kb.kot_kb(),
     )
+
+
+async def _cb_kot_first_hand(q, context, chat_id, state, payload):
+    g = state.get("active_game")
+    if not g or game.game_ended(g):
+        await q.answer(msg.stale_button())
+        return
+    if payload == "cancel":
+        await q.answer()
+        await _edit_scoreboard(context, chat_id, state)
+        return
+    parts = payload.split(":")
+    if len(parts) != 2:
+        await q.answer()
+        return
+    hakem_team, winner = parts
+    if hakem_team not in ("red", "blue") or winner not in ("red", "blue"):
+        await q.answer()
+        return
+    if g["hands"]:
+        # state changed under us; fall back to regular kot flow
+        await q.answer(msg.stale_button())
+        return
+    # override the random pre-pick with the user-confirmed hakem
+    g["initial_hakem"] = hakem_team
+    g["hakem"] = hakem_team
+    events.append(chat_id, {
+        "type": "hakem_confirmed",
+        "initial_hakem": hakem_team,
+        "reason": "first_hand_kot",
+    })
+    pts = game.add_hand(g, winner, kot=True)
+    _log_hand_event(chat_id, g)
+    await q.answer(f"⚡ +{pts} {msg.TEAM_NAME[winner]}")
+    if game.game_ended(g):
+        await _finish_game(context, chat_id, state)
+    else:
+        storage.save(chat_id, state)
+        await _edit_scoreboard(context, chat_id, state)
 
 
 async def _cb_kot_choose(q, context, chat_id, state, choice):
@@ -326,6 +471,7 @@ async def _cb_kot_choose(q, context, chat_id, state, choice):
         await q.answer()
         return
     pts = game.add_hand(g, choice, kot=True)
+    _log_hand_event(chat_id, g)
     await q.answer(f"⚡ +{pts} {msg.TEAM_NAME[choice]}")
     if game.game_ended(g):
         await _finish_game(context, chat_id, state)
@@ -339,6 +485,7 @@ async def _cb_undo_ended(q, context, chat_id, state):
         await q.answer(msg.cant_undo_ended())
         return
     if game.restore_last_game(state):
+        events.append(chat_id, {"type": "undo_ended_game"})
         storage.save(chat_id, state)
         await q.answer("بازی برگشت")
         try:
@@ -378,6 +525,7 @@ async def _cb_confirm(q, context, chat_id, state, action):
         return
     if action == "newgame":
         if state.get("active_game"):
+            _cancel_refresh(chat_id)
             old_id = state["active_game"].get("score_board_message_id")
             if old_id:
                 await _safe_delete(context.bot, chat_id, old_id)
@@ -387,9 +535,15 @@ async def _cb_confirm(q, context, chat_id, state, action):
         return
     if action == "endgame":
         if state.get("active_game"):
+            _cancel_refresh(chat_id)
             old_id = state["active_game"].get("score_board_message_id")
             if old_id:
                 await _safe_delete(context.bot, chat_id, old_id)
+            events.append(chat_id, {
+                "type": "game_aborted",
+                "score_at_abort": dict(state["active_game"]["score"]),
+                "hands_at_abort": len(state["active_game"]["hands"]),
+            })
             state["active_game"] = None
             state["last_ended_game"] = None
             storage.save(chat_id, state)
@@ -419,6 +573,11 @@ async def _cb_import(q, context, chat_id, state, data):
     r, b, rk, bk = pending["r"], pending["b"], pending["rk"], pending["bk"]
     replaced = (op == "rep")
     game.add_imported_day(state, day, r, b, rk, bk, replace=replaced)
+    events.append(chat_id, {
+        "type": "import",
+        "day": day, "wins": {"red": r, "blue": b},
+        "kots": {"red": rk, "blue": bk}, "replaced": replaced,
+    })
     storage.save(chat_id, state)
     context.chat_data.pop("pending_import", None)
     await q.answer("ثبت شد")
@@ -431,7 +590,18 @@ async def _cb_import(q, context, chat_id, state, data):
 
 async def _finish_game(context, chat_id: int, state: dict):
     g = state["active_game"]
+    _cancel_refresh(chat_id)
     record = game.archive_game(state)
+    events.append(chat_id, {
+        "type": "game_end",
+        "winner": record["winner"],
+        "final_score": record["final_score"],
+        "kots_normal": record["kots_normal"],
+        "kots_hakem":  record["kots_hakem"],
+        "hands_count": record["hands_count"],
+        "started_at": record["started_at"],
+        "ended_at":   record["ended_at"],
+    })
     today = game.today_summary(state)
     storage.save(chat_id, state)
     sb_id = g.get("score_board_message_id")
@@ -439,7 +609,7 @@ async def _finish_game(context, chat_id: int, state: dict):
         await _safe_delete(context.bot, chat_id, sb_id)
     end_msg = await context.bot.send_message(
         chat_id=chat_id,
-        text=msg.end_game_text(record, today),
+        text=msg.end_game_text(record, today, state),
         reply_markup=kb.end_kb(),
         parse_mode=ParseMode.HTML,
     )

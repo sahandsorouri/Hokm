@@ -42,21 +42,51 @@ def _last_hand_line(g: dict) -> str:
     return f"آخرین: {label} برد (+{fa(last['points'])})"
 
 
+def _relative_time(iso_str: str) -> str:
+    """'همین الان' / 'X ثانیه پیش' / 'X دقیقه پیش' / 'X ساعت پیش' from an ISO timestamp."""
+    from game import now_tz
+    try:
+        then = datetime.fromisoformat(iso_str)
+    except (TypeError, ValueError):
+        return ""
+    delta = (now_tz() - then).total_seconds()
+    if delta < 10:
+        return "همین الان"
+    if delta < 60:
+        return f"{fa(int(delta))} ثانیه پیش"
+    minutes = int(delta // 60)
+    if minutes < 60:
+        return f"{fa(minutes)} دقیقه پیش"
+    hours = minutes // 60
+    mins = minutes % 60
+    if mins == 0:
+        return f"{fa(hours)} ساعت پیش"
+    return f"{fa(hours)} ساعت و {fa(mins)} دقیقه پیش"
+
+
 def score_board_text(g: dict) -> str:
     red = g["score"]["red"]
     blue = g["score"]["blue"]
     hand_num = len(g["hands"]) + 1
     hakem_line = f" • حاکم: {TEAM_COLOR[g['hakem']]}" if g["hands"] else ""
+    last_evt = g.get("last_event_at") or g.get("started_at") or ""
+    update_line = ""
+    if last_evt:
+        rel = _relative_time(last_evt)
+        if rel:
+            label = "آخرین دست" if g["hands"] else "شروع بازی"
+            update_line = f"\n🕐 {label}: {rel}"
     return (
         "🃏 <b>بازی در جریان</b>\n"
         f"\n🔴 قرمز  <b>{fa(red)} — {fa(blue)}</b>  آبی 🔵\n"
         "━━━━━━━━━━━━━━━━━\n"
         f"دست {fa(hand_num)}{hakem_line}\n"
         f"{_last_hand_line(g)}"
+        f"{update_line}"
     )
 
 
-def end_game_text(record: dict, today: dict) -> str:
+def end_game_text(record: dict, today: dict, state: dict | None = None) -> str:
     winner = record["winner"]
     fs = record["final_score"]
 
@@ -75,6 +105,16 @@ def end_game_text(record: dict, today: dict) -> str:
     if tlk["red"] or tlk["blue"]:
         total_kot_line = f"\n⚡ 🔴×{fa(tlk['red'])}  🔵×{fa(tlk['blue'])}"
 
+    split_line = _split_kot_line(today.get("split_kots"))
+
+    extras = ""
+    if state is not None:
+        lifetime = lifetime_extras_text(state)
+        pct = end_game_percentile_text(record, state)
+        extra_lines = [s for s in (lifetime, pct) if s]
+        if extra_lines:
+            extras = "\n\n" + "\n\n".join(extra_lines)
+
     return (
         "🏆 <b>بازی تموم شد!</b>\n"
         f"{TEAM_LABEL[winner]} برنده 🎉\n"
@@ -84,12 +124,99 @@ def end_game_text(record: dict, today: dict) -> str:
         f"\n📅 <b>امروز ({today['today_date']}):</b>\n"
         f"{today_line}\n"
         "\n🏆 <b>مجموع کل:</b>\n"
-        f"{total_line}{total_kot_line}"
+        f"{total_line}{total_kot_line}{split_line}"
+        f"{extras}"
     )
 
 
+def _format_hours_minutes(total_seconds: float) -> str:
+    s = int(total_seconds)
+    h = s // 3600
+    m = (s % 3600) // 60
+    if h == 0:
+        return f"{fa(m)} دقیقه"
+    if m == 0:
+        return f"{fa(h)} ساعت"
+    return f"{fa(h)} ساعت و {fa(m)} دقیقه"
+
+
+def lifetime_extras_text(state: dict) -> str:
+    """Total games / total hands / total hours. Used at end-of-game and in /stats."""
+    from game import lifetime_stats
+
+    ls = lifetime_stats(state)
+    lines = []
+    if ls["games"] > 0:
+        lines.append(f"🃏 کل بازی‌ها: {fa(ls['games'])}")
+    if ls["hands"] > 0:
+        lines.append(f"🎴 کل دست‌ها: {fa(ls['hands'])}")
+    if ls["total_seconds"] > 0:
+        lines.append(f"⏱ کل زمان بازی: {_format_hours_minutes(ls['total_seconds'])}")
+    if not lines:
+        return ""
+    return "<b>📈 مجموع تاریخچه</b>\n" + "\n".join(lines)
+
+
+def end_game_percentile_text(record: dict, state: dict) -> str:
+    """One-line speed percentile for the just-finished game, in plain language.
+    Empty if not enough data or game pre-dates the cutoff."""
+    from datetime import datetime
+    from game import lifetime_stats, duration_percentile_faster
+    import config as _cfg
+
+    try:
+        start = datetime.fromisoformat(record["started_at"])
+        end = datetime.fromisoformat(record["ended_at"])
+    except (KeyError, TypeError, ValueError):
+        return ""
+    if start < _cfg.STATS_DURATION_CUTOFF:
+        return ""
+    dur = (end - start).total_seconds()
+    durs = lifetime_stats(state)["durations_after_cutoff"]
+    if len(durs) < 5:
+        return ""
+    pct = duration_percentile_faster(durs, dur)
+    if pct is None:
+        return ""
+    # plain-language phrasing
+    if pct >= 80:
+        flavor = "🚀 سریع‌ترین‌ها"
+    elif pct >= 50:
+        flavor = "⏩ بالاتر از میانگین (سریع‌تر)"
+    elif pct >= 20:
+        flavor = "🐢 آروم‌تر از میانگین"
+    else:
+        flavor = "🐌 از طولانی‌ترین‌ها"
+    return f"🏁 این بازی از {fa(pct)}٪ بازی‌ها سریع‌تر تموم شد — {flavor}"
+
+
+def _split_kot_line(split: dict | None) -> str:
+    if not split:
+        return ""
+    n = split["normal"]
+    h = split["hakem"]
+    any_data = n["red"] or n["blue"] or h["red"] or h["blue"]
+    if not any_data and not split.get("has_legacy"):
+        return ""
+    lines = []
+    if any_data:
+        lines.append(
+            f"\n⚡ کت عادی: 🔴×{fa(n['red'])}  🔵×{fa(n['blue'])}"
+        )
+        lines.append(
+            f"👑⚡ حاکم‌کت: 🔴×{fa(h['red'])}  🔵×{fa(h['blue'])}"
+        )
+    if split.get("has_legacy"):
+        lt = split["legacy_total"]
+        if lt["red"] or lt["blue"]:
+            lines.append(
+                f"<i>(کت‌های قبل از این آپدیت بدون تفکیک: 🔴×{fa(lt['red'])}  🔵×{fa(lt['blue'])})</i>"
+            )
+    return "\n".join(lines)
+
+
 def stats_text(state: dict) -> str:
-    from game import daily_breakdown, totals, game_day, now_tz
+    from game import daily_breakdown, totals, game_day, now_tz, split_kot_totals
 
     by = daily_breakdown(state)
     if not by:
@@ -113,6 +240,12 @@ def stats_text(state: dict) -> str:
     )
     if total_k["red"] or total_k["blue"]:
         lines.append(f"⚡ کت‌ها: 🔴×{fa(total_k['red'])}  🔵×{fa(total_k['blue'])}")
+    split_line = _split_kot_line(split_kot_totals(state))
+    if split_line:
+        lines.append(split_line.lstrip("\n"))
+    extras = lifetime_extras_text(state)
+    if extras:
+        lines.append("\n" + extras)
     return "\n".join(lines)
 
 
@@ -205,3 +338,10 @@ def stale_button() -> str:
 
 def kot_team_prompt() -> str:
     return "⚡ <b>کدوم تیم کت کرد؟</b>"
+
+
+def kot_first_hand_prompt() -> str:
+    return (
+        "⚡ <b>کت دست اول</b>\n"
+        "چون هنوز هیچ دستی ثبت نشده، باید بگی حاکم کی بود و کی کت کرد:"
+    )

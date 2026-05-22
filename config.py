@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -19,3 +20,11 @@ DAY_CUTOFF_HOUR = 6
 UNDO_WINDOW_SECONDS = 300
 WIN_TARGET = 7
 EPHEMERAL_DELETE_SECONDS = 5
+
+# Duration averages / percentiles only consider games started on/after this moment.
+# Earlier games predate the bot's reliable timestamping. 2026-05-07 22:00 Dubai (UTC+4)
+# == 2026-05-07 21:30 Tehran (UTC+3:30).
+STATS_DURATION_CUTOFF = datetime.fromisoformat("2026-05-07T21:30:00+03:30")
+
+# Live scoreboard auto-refresh interval (used in step 5).
+LIVE_REFRESH_SECONDS = 60

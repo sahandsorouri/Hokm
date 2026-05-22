@@ -25,6 +25,21 @@ def kot_kb() -> InlineKeyboardMarkup:
     ])
 
 
+def kot_first_hand_kb() -> InlineKeyboardMarkup:
+    # callback data: kot1:<hakem>:<winner>
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("👑🔴 → 🔴 کت (+۲)", callback_data="kot1:red:red"),
+            InlineKeyboardButton("👑🔴 → 🔵 کت (+۳)", callback_data="kot1:red:blue"),
+        ],
+        [
+            InlineKeyboardButton("👑🔵 → 🔵 کت (+۲)", callback_data="kot1:blue:blue"),
+            InlineKeyboardButton("👑🔵 → 🔴 کت (+۳)", callback_data="kot1:blue:red"),
+        ],
+        [InlineKeyboardButton("← برگشت", callback_data="kot1:cancel")],
+    ])
+
+
 def end_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🔄 بازی جدید", callback_data="newgame")],
