@@ -100,11 +100,8 @@ def end_game_text(record: dict, today: dict, state: dict | None = None) -> str:
     total_line = (
         f"🔴 {fa(today['total_wins']['red'])} — {fa(today['total_wins']['blue'])} 🔵"
     )
-    tlk = today["total_kots"]
-    total_kot_line = ""
-    if tlk["red"] or tlk["blue"]:
-        total_kot_line = f"\n⚡ 🔴×{fa(tlk['red'])}  🔵×{fa(tlk['blue'])}"
-
+    # The normal/hakem split below already accounts for every kot, so we don't
+    # repeat an undifferentiated total line here.
     split_line = _split_kot_line(today.get("split_kots"))
 
     extras = ""
@@ -124,7 +121,7 @@ def end_game_text(record: dict, today: dict, state: dict | None = None) -> str:
         f"\n📅 <b>امروز ({today['today_date']}):</b>\n"
         f"{today_line}\n"
         "\n🏆 <b>مجموع کل:</b>\n"
-        f"{total_line}{total_kot_line}{split_line}"
+        f"{total_line}{split_line}"
         f"{extras}"
     )
 
@@ -152,6 +149,8 @@ def lifetime_extras_text(state: dict) -> str:
         lines.append(f"🎴 کل دست‌ها: {fa(ls['hands'])}")
     if ls["total_seconds"] > 0:
         lines.append(f"⏱ کل زمان بازی: {_format_hours_minutes(ls['total_seconds'])}")
+        if ls.get("avg_game_seconds"):
+            lines.append(f"⏱ میانگین هر بازی: {_format_hours_minutes(ls['avg_game_seconds'])}")
     if not lines:
         return ""
     return "<b>📈 مجموع تاریخچه</b>\n" + "\n".join(lines)
@@ -221,13 +220,12 @@ def stats_text(state: dict) -> str:
             line += f"  •  ⚡ 🔴×{fa(slot['kots']['red'])}  🔵×{fa(slot['kots']['blue'])}"
         lines.append(line)
 
-    total_w, total_k = totals(state)
+    total_w, _ = totals(state)
     lines.append("\n━━━━━━━━━━━━━━━━━")
     lines.append(
         f"🏆 <b>مجموع کل:</b> 🔴 {fa(total_w['red'])} — {fa(total_w['blue'])} 🔵"
     )
-    if total_k["red"] or total_k["blue"]:
-        lines.append(f"⚡ کت‌ها: 🔴×{fa(total_k['red'])}  🔵×{fa(total_k['blue'])}")
+    # The normal/hakem split already covers every kot, so no undifferentiated total line.
     split_line = _split_kot_line(split_kot_totals(state))
     if split_line:
         lines.append(split_line.lstrip("\n"))

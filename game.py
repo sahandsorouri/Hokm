@@ -311,7 +311,10 @@ def _record_duration_sec(rec: dict) -> float | None:
 def lifetime_stats(state: dict) -> dict:
     """Lifetime aggregates over the chat's history.
 
-    - games / hands / total_seconds: across ALL live records
+    - games: live records + imported games (imported store a per-day win tally)
+    - hands / total_seconds: only games we actually logged (imported games carry
+      no per-hand or duration data, so they're not fabricated here)
+    - avg_game_seconds / timed_games: average duration over the games that have one
     - durations_after_cutoff: list of durations (sec) for games started >= STATS_DURATION_CUTOFF,
       used for averages/percentiles only.
     """
@@ -343,18 +346,17 @@ def lifetime_stats(state: dict) -> dict:
             continue
         if start >= config.STATS_DURATION_CUTOFF:
             durations_after_cutoff.append(dur)
-    # Imported games have no per-game logs; fill duration/hands with the average of
-    # logged games so lifetime totals reflect every game actually played.
-    if imported_games:
-        games += imported_games
-        if known_durations:
-            total_seconds += (sum(known_durations) / len(known_durations)) * imported_games
-        if known_hands:
-            hands += round((sum(known_hands) / len(known_hands)) * imported_games)
+    # Imported games count toward the games tally, but they carry no duration or
+    # per-hand logs, so we don't fabricate time/hands for them: total_seconds and
+    # hands stay grounded in the games we actually logged.
+    games += imported_games
+    avg_game_seconds = (sum(known_durations) / len(known_durations)) if known_durations else 0.0
     return {
         "games": games,
         "hands": hands,
         "total_seconds": total_seconds,
+        "avg_game_seconds": avg_game_seconds,
+        "timed_games": len(known_durations),
         "durations_after_cutoff": durations_after_cutoff,
     }
 
