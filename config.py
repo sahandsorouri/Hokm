@@ -28,3 +28,7 @@ STATS_DURATION_CUTOFF = datetime.fromisoformat("2026-05-07T21:30:00+03:30")
 
 # Live scoreboard auto-refresh interval (used in step 5).
 LIVE_REFRESH_SECONDS = 60
+
+# Legacy kots (logged before normal/hakem split tracking) are estimated: this
+# fraction is assumed to have been hakem-kots (+3), the rest normal kots (+2).
+LEGACY_HAKEM_KOT_RATIO = 0.3

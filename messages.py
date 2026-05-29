@@ -195,24 +195,12 @@ def _split_kot_line(split: dict | None) -> str:
         return ""
     n = split["normal"]
     h = split["hakem"]
-    any_data = n["red"] or n["blue"] or h["red"] or h["blue"]
-    if not any_data and not split.get("has_legacy"):
+    if not (n["red"] or n["blue"] or h["red"] or h["blue"]):
         return ""
-    lines = []
-    if any_data:
-        lines.append(
-            f"\n⚡ کت عادی: 🔴×{fa(n['red'])}  🔵×{fa(n['blue'])}"
-        )
-        lines.append(
-            f"👑⚡ حاکم‌کت: 🔴×{fa(h['red'])}  🔵×{fa(h['blue'])}"
-        )
-    if split.get("has_legacy"):
-        lt = split["legacy_total"]
-        if lt["red"] or lt["blue"]:
-            lines.append(
-                f"<i>(کت‌های قبل از این آپدیت بدون تفکیک: 🔴×{fa(lt['red'])}  🔵×{fa(lt['blue'])})</i>"
-            )
-    return "\n".join(lines)
+    return (
+        f"\n⚡ کت عادی: 🔴×{fa(n['red'])}  🔵×{fa(n['blue'])}"
+        f"\n👑⚡ حاکم‌کت: 🔴×{fa(h['red'])}  🔵×{fa(h['blue'])}"
+    )
 
 
 def stats_text(state: dict) -> str:

@@ -217,19 +217,20 @@ def _record_wins_kots(rec: dict) -> tuple[dict, dict]:
 
 
 def _record_split_kots(rec: dict) -> dict:
-    """Return per-record kot breakdown. For legacy records without the breakdown,
-    return None per bucket so callers can show 'unknown' instead of guessing."""
+    """Return per-record kot breakdown (normal=+2, hakem=+3).
+
+    Records carry an explicit breakdown once they've been logged/migrated. For any
+    still-legacy record we estimate it: assume ~30% of that record's kots were
+    hakem-kots (see config.LEGACY_HAKEM_KOT_RATIO)."""
     if rec.get("kots_normal") is not None or rec.get("kots_hakem") is not None:
         return {
             "normal": dict(rec.get("kots_normal", _zero_team())),
             "hakem":  dict(rec.get("kots_hakem",  _zero_team())),
-            "known": True,
         }
-    return {
-        "normal": _zero_team(),
-        "hakem":  _zero_team(),
-        "known": False,
-    }
+    k = dict(rec.get("kots", _zero_team()))
+    hakem = {t: int(k.get(t, 0) * config.LEGACY_HAKEM_KOT_RATIO + 0.5) for t in ("red", "blue")}
+    normal = {t: k.get(t, 0) - hakem[t] for t in ("red", "blue")}
+    return {"normal": normal, "hakem": hakem}
 
 
 def daily_breakdown(state: dict) -> dict:
@@ -261,31 +262,38 @@ def totals(state: dict) -> tuple[dict, dict]:
 
 def split_kot_totals(state: dict) -> dict:
     """Aggregate split kot counts across all live (non-imported) records.
-    Returns counts plus a flag for whether any record was 'unknown' (legacy)."""
+    Legacy records without an explicit breakdown are estimated in _record_split_kots."""
     normal = _zero_team()
     hakem = _zero_team()
-    has_legacy = False
-    legacy_total = _zero_team()
     for rec in state["history"]:
         if rec.get("imported"):
             continue
         split = _record_split_kots(rec)
-        if split["known"]:
-            normal["red"] += split["normal"]["red"]
-            normal["blue"] += split["normal"]["blue"]
-            hakem["red"] += split["hakem"]["red"]
-            hakem["blue"] += split["hakem"]["blue"]
-        else:
-            has_legacy = True
-            kots = dict(rec.get("kots", _zero_team()))
-            legacy_total["red"] += kots["red"]
-            legacy_total["blue"] += kots["blue"]
-    return {
-        "normal": normal,
-        "hakem": hakem,
-        "has_legacy": has_legacy,
-        "legacy_total": legacy_total,
-    }
+        normal["red"] += split["normal"]["red"]
+        normal["blue"] += split["normal"]["blue"]
+        hakem["red"] += split["hakem"]["red"]
+        hakem["blue"] += split["hakem"]["blue"]
+    return {"normal": normal, "hakem": hakem}
+
+
+def _reconstruct_hands_count(rec: dict) -> int | None:
+    """Hands played in a live record. Uses the stored hands_count when present.
+    For legacy records (logged before per-hand tracking) it reconstructs the count
+    from the final score and kots: every hand scores +1 (normal win), +2 (hakem kot)
+    or +3 (hakem-kot). With H = #hands, K = #kots, K3 = #hakem-kots, the points sum to
+    H + K + K3, so H = points - K - K3. Yields <= 13 for a single game to 7."""
+    hc = rec.get("hands_count")
+    if hc is not None:
+        return hc
+    fs = rec.get("final_score")
+    if not fs:
+        return None
+    points = fs.get("red", 0) + fs.get("blue", 0)
+    k = dict(rec.get("kots", _zero_team()))
+    total_kots = k.get("red", 0) + k.get("blue", 0)
+    split = _record_split_kots(rec)
+    hakem_kots = split["hakem"]["red"] + split["hakem"]["blue"]
+    return max(0, points - total_kots - hakem_kots)
 
 
 def _record_duration_sec(rec: dict) -> float | None:
@@ -311,22 +319,38 @@ def lifetime_stats(state: dict) -> dict:
     hands = 0
     total_seconds = 0.0
     durations_after_cutoff: list[float] = []
+    known_durations: list[float] = []
+    known_hands: list[int] = []
+    imported_games = 0
     for rec in state["history"]:
         if rec.get("imported"):
+            wins = rec.get("wins", _zero_team())
+            imported_games += int(wins.get("red", 0)) + int(wins.get("blue", 0))
             continue
         games += 1
-        if rec.get("hands_count"):
-            hands += rec["hands_count"]
+        hc = _reconstruct_hands_count(rec)
+        if hc:
+            hands += hc
+            known_hands.append(hc)
         dur = _record_duration_sec(rec)
         if dur is None:
             continue
         total_seconds += dur
+        known_durations.append(dur)
         try:
             start = datetime.fromisoformat(rec["started_at"])
         except (KeyError, TypeError, ValueError):
             continue
         if start >= config.STATS_DURATION_CUTOFF:
             durations_after_cutoff.append(dur)
+    # Imported games have no per-game logs; fill duration/hands with the average of
+    # logged games so lifetime totals reflect every game actually played.
+    if imported_games:
+        games += imported_games
+        if known_durations:
+            total_seconds += (sum(known_durations) / len(known_durations)) * imported_games
+        if known_hands:
+            hands += round((sum(known_hands) / len(known_hands)) * imported_games)
     return {
         "games": games,
         "hands": hands,
